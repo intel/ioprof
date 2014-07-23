@@ -1709,7 +1709,16 @@ if($mode eq 'trace')
         if($? != 0 ) { die "You need to have sudo permissions to collect all necessary data.  Please run from a privilaged account."; }
 
         ### Save fdisk info
-        `fdisk -ul $dev > fdisk.$dev_str`;
+        print "Running fdisk\n" if ($DEBUG);
+        my $fdisk_version = `fdisk -v`;
+        if($fdisk_version =~ /util-linux-ng/)
+        {
+                `fdisk -ul $dev > fdisk.$dev_str`;
+        }
+        else
+        {
+                `fdisk -l -u=sectors $dev > fdisk.$dev_str`;
+        }
 
         ### Cleanup previous mess
         `rm -f blk.out*`;
@@ -1926,8 +1935,19 @@ if ($mode eq "post")
 
 if ($mode eq 'live')
 {
-        $sector_size = `fdisk -ul $dev 2>/dev/null| grep 'Units' | awk '{ print \$9 }'`;
-        $total_lbas  = `fdisk -ul $dev | grep total | awk '{ print \$8 }'`;
+ 
+        my $fdisk_version = `fdisk -v`;
+        if($fdisk_version =~ /util-linux-ng/)
+        {
+                $sector_size = `fdisk -ul $dev 2>/dev/null| grep 'Units' | awk '{ print \$9 }'`;
+                $total_lbas  = `fdisk -ul $dev | grep total | awk '{ print \$8 }'`;
+        }
+        else
+        {
+                $sector_size = `fdisk -l -u=sectors $dev 2>/dev/null| grep 'Units' | awk '{ print \$9 }'`;
+                $total_lbas  = `fdisk -l -u=sectors $dev | grep total | awk '{ print \$8 }'`;
+        }
+ 
         my $term_x = `tput cols` -$SCALEX;
         my $term_y = `tput lines` -$SCALEY;
 
