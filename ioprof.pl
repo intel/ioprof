@@ -165,7 +165,7 @@ sub usage
         print "-r <runtime>        : Runtime (seconds) for tracing\n";
         print "-t <dev.tar file>   : A .tar file is created during the 'trace' phase.  Please use this file for the 'post' phase\n";
         print "                      You can offload this file and run the 'post' phase on another system.\n";
-        print "-v                  : (OPTIONAL) Print lots of verbose messages, primarily for debug purposes.  Not recommended for normal use.\n";
+        print "-v                  : (OPTIONAL) Print verbose messages.\n";
         print "-f                  : (OPTIONAL) Map all files on the device specified by -d <dev> during 'trace' phase to their LBA ranges.\n";
         print "                       This is useful for determining the most fequently accessed files, but may take a while on really large filesystems\n";
         print "-p                  : (OPTIONAL) Generate a .pdf output file in addition to STDOUT.  This requires 'pdflatex', 'gnuplot' and 'terminal png'\n";
@@ -177,7 +177,7 @@ sub usage
 sub check_args
 {
         my %opt;
-        getopts('m:d:t:fr:vp', \%opt) or usage();
+        getopts('m:d:t:fr:vpx', \%opt) or usage();
         print "check args\n" if ($VERBOSE);
 
         if(defined($opt{'v'}))
@@ -185,6 +185,12 @@ sub check_args
                 $VERBOSE=1;  # Enable verbose messaging, may slow things down
                 print "VERBOSE enabled\n";
         }
+	if(defined($opt{'x'}))
+	{
+                $VERBOSE=1;  # Enable verbose messaging, may slow things down
+		$DEBUG=1; # Enable debug messaging, will slow things down
+                print "VERBOSE and DEBUG enabled\n";
+	}
 
         if(!$opt{'m'}) { usage(); }
         $mode = $opt{'m'};
@@ -197,13 +203,13 @@ sub check_args
 
                 $dev = $opt{'d'};
                 $runtime = $opt{'r'};
-                print "Runtime: $runtime\n" if ($VERBOSE);
+                print "Runtime: $runtime\n" if ($DEBUG);
 
                 $live=1;
                 if ($dev =~ /\/dev\/(\S+)/) { $dev_str = $1; }
                 $dev_str =~ s/\//_/g;
-                print "Option -d $dev\n" if($VERBOSE);
-                print "str: $dev_str\n" if($VERBOSE);
+                print "Option -d $dev\n" if($DEBUG);
+                print "str: $dev_str\n" if($DEBUG);
 
                 # Check if $dev is not a block special file
                 if(! -b $dev)
@@ -226,8 +232,8 @@ sub check_args
                         $pdf_report = 1;
                 }
                 $fdisk_file = "fdisk.$dev_str";
-                print "fdisk_file: $fdisk_file\n" if ($VERBOSE);
-                print "Option -t $tar_file\n" if($VERBOSE);
+                print "fdisk_file: $fdisk_file\n" if ($DEBUG);
+                print "Option -t $tar_file\n" if($DEBUG);
                 push(@files_to_cleanup, $fdisk_file);
 
                 if(! -f $tar_file)
@@ -243,16 +249,16 @@ sub check_args
                 if(!$opt{'d'} || !$opt{'r'}) { usage(); }
 
                 if($opt{'f'}) { $trace_files = 1 ;}
-                print "Trace files = $trace_files\n" if($VERBOSE);
+                print "Trace files = $trace_files\n" if($DEBUG);
 
                 $dev = $opt{'d'};
                 $runtime = $opt{'r'};
-                print "Runtime: $runtime\n" if ($VERBOSE);
+                print "Runtime: $runtime\n" if ($DEBUG);
 
                 if ($dev =~ /\/dev\/(\S+)/) { $dev_str = $1; }
                 $dev_str =~ s/\//_/g;
-                print "Option -d $dev\n" if($VERBOSE);
-                print "str: $dev_str\n" if($VERBOSE);
+                print "Option -d $dev\n" if($DEBUG);
+                print "str: $dev_str\n" if($DEBUG);
 
                 # Check if $dev is a block special file
                 if(! -b $dev)
@@ -800,7 +806,7 @@ sub print_results
                 {
                         print "$total: $counts{$total}\n" if ($DEBUG);
                         $tot += $total * $counts{$total};
-                        print "tot=$tot\n" if($VERBOSE);
+                        print "tot=$tot\n" if($DEBUG);
 
                         if (!$max_set)
                         {
@@ -970,7 +976,7 @@ sub print_header_heatmap
         `gnuplot header_heatmap.$dev_str.$num`;
         if($? != 0 ) { die("Failed to run gnuplot header_heatmap.$dev_str.$num Error: $!"); }
 
-        print "ph iot=$io_total\n" if ($VERBOSE);
+        print "ph iot=$io_total\n" if ($DEBUG);
 } # print_header
 
 ### Print histogram header for PDF
@@ -1129,7 +1135,7 @@ sub print_stats
                 $rtot += $r_totals{$j};
                 #my $stuff = $r_totals{$j};
                 my $r_perc = ($io_total) ? $r_totals{$j} / $io_total * 100 : 0;
-                print "r_perc=$r_perc\n" if ($VERBOSE);
+                print "r_perc=$r_perc\n" if ($DEBUG);
                 if ($r_perc > 0.5)
                 {
                         if($pdf_report)
@@ -1157,7 +1163,7 @@ sub print_stats
         {
                 $wtot += $w_totals{$j};
                 my $w_perc = ($io_total) ? $w_totals{$j} / $io_total * 100 : 0;
-                print "w_perc=$w_perc\n" if ($VERBOSE);
+                print "w_perc=$w_perc\n" if ($DEBUG);
                 if ($w_perc > 0.5)
                 {
                         if($pdf_report)
@@ -1369,7 +1375,7 @@ sub thread_parse
         `gunzip $file.gz`;
 
 
-        print "\nSTART: $file $num\n" if ($VERBOSE);
+        print "\nSTART: $file $num\n" if ($DEBUG);
         open($CMD, "<$file");
         while(<$CMD>)
         {
@@ -1383,8 +1389,8 @@ sub thread_parse
         close($CMD);
 
         total_thread_counts($num);
-        print "\nFINISH $file: $linecount lines\n" if ($VERBOSE);
-        print "Remove $file\n" if ($VERBOSE);
+        print "\nFINISH $file: $linecount lines\n" if ($DEBUG);
+        print "Remove $file\n" if ($DEBUG);
         `rm -f $file`;
         return;
 } # thread_parse
@@ -1396,7 +1402,7 @@ sub parse_me
         my $lba = shift;
         my $size = shift;
 
-        print "rw=$rw lba=$lba size=$size\n" if($VERBOSE);
+        print "rw=$rw lba=$lba size=$size\n" if($DEBUG);
 
         if ($rw eq "R" || $rw eq "RW")
         {
@@ -1447,7 +1453,7 @@ sub parse_filetrace
         my $num = shift;
         my %thread_files_to_lbas;
         `gunzip $file.gz`;
-        print "tracefile = $file $num\n" if($VERBOSE);
+        print "tracefile = $file $num\n" if($DEBUG);
         my $FH;
         open ($FH,"<", $file);
         while (<$FH>)
@@ -1462,16 +1468,16 @@ sub parse_filetrace
                 }
         }
         close($FH);
-        print "Thread $num wants file_to_lba lock\n" if ($VERBOSE);
+        print "Thread $num wants file_to_lba lock\n" if ($DEBUG);
         $files_to_lbas_semaphore->down();
-        print "Thread $num has file_to_lba lock\n" if ($VERBOSE);
+        print "Thread $num has file_to_lba lock\n" if ($DEBUG);
         foreach my $object (keys %thread_files_to_lbas)
         {
                 my $ranges = $thread_files_to_lbas{$object};
                 $files_to_lbas{$object} = $ranges;
         }
         $files_to_lbas_semaphore->up();
-        print "Thread $num freed file_to_lba lock\n" if ($VERBOSE);
+        print "Thread $num freed file_to_lba lock\n" if ($DEBUG);
 
         return;
 }
@@ -1482,7 +1488,7 @@ sub cleanup_files
         print "Cleaning up temp files\n" if ($VERBOSE);
         foreach my $file (@files_to_cleanup)
         {
-                print "$file\n" if ($VERBOSE);
+                print "$file\n" if ($DEBUG);
                 `rm -f $file`;
         }
         `rm -f filetrace.*.txt`;
@@ -1502,7 +1508,7 @@ sub choose_color
 
         if($color_index > ($choices-1))
         {
-                print "num=$num\n" if($VERBOSE);
+                print "num=$num\n" if($DEBUG);
                 print "HIT!\n" if ($DEBUG);
                 $color_index=7;
                 return $red;
@@ -1657,7 +1663,7 @@ sub draw_heatmap
         print "+" . "-" x $term_x . "-+\n";
         #$cap = find_cap($term_x, $term_y);
         $vpc = int($cap / $choices) ? int($cap / $choices) : 1; # values per choice
-        print "cap=$cap vpc=$vpc pigeons=$pigeons holes=$holes rate=$rate max_bucket_hits=$max_bucket_hits\n" if($VERBOSE);
+        print "cap=$cap vpc=$vpc pigeons=$pigeons holes=$holes rate=$rate max_bucket_hits=$max_bucket_hits\n" if($DEBUG);
         for(my $y=0; $y<$term_y; $y++)
         {
                 print "|";
@@ -1828,7 +1834,7 @@ if ($mode eq "post")
         }
         $sector_size=`cat $fdisk_file | grep 'Units'| awk '{ print \$9 }'`;
 	my $lba_line = `cat $fdisk_file | grep "sectors\$"`;
-	print "$lba_line\n" if ($VERBOSE);
+	print "$lba_line\n" if ($DEBUG);
 	if ($lba_line =~ /(\d+) sectors$/) { $total_lbas=$1; }
         $dev = `cat $fdisk_file | grep Disk | awk '{ print \$2 }'| head -1 | tr ':' ' '`;
         chomp($dev);
@@ -1843,10 +1849,9 @@ if ($mode eq "post")
 
         # Make the plot a matrix to keep gnuplot happy
         $yheight=$xwidth = int(sqrt($num_buckets));
-        print "x=$xwidth y=$yheight\n" if ($VERBOSE);
+        print "x=$xwidth y=$yheight\n" if ($DEBUG);
 
         print "num_buckets=$num_buckets sector_size=$sector_size total_lbas=$total_lbas bucket_size=$bucket_size\n" if ($VERBOSE);
-        print "dev: $dev\n" if ($VERBOSE);
 
         `rm -f filetrace.$dev_str.*.txt`;
         `rm -f blk.out.$dev_str.*.blkparse`;
@@ -1960,7 +1965,7 @@ if ($mode eq 'live')
 
         # Make the plot a matrix to keep gnuplot happy
         $yheight=$xwidth = int(sqrt($num_buckets));
-        print "x=$xwidth y=$yheight\n" if ($VERBOSE);
+        print "x=$xwidth y=$yheight\n" if ($DEBUG);
 
         print "num_buckets=$num_buckets sector_size=$sector_size total_lbas=$total_lbas bucket_size=$bucket_size\n" if ($VERBOSE);
 
