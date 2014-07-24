@@ -315,7 +315,6 @@ sub bucket_to_lba
         return int($bucket * $bucket_size / $sector_size);
 }
 
-
 # debufs method
 # This method can only be used on ext2/ext3/ext4 filesystems
 # I don't plan on using this method right now
@@ -324,7 +323,6 @@ sub debugfs_method
 {
         my $file = shift;
         $extents = "";
-        #$extents = `debugfs -R "dump_extents $file" $dev 2>/dev/null| awk '{ print \$8"-"\$10 }' | tail -n +2 | tr "\n" " "`;
         $file =~ s/$mountpoint//;
         print "file: $file\n" if ($DEBUG);
         my @extent_out = `debugfs -R "dump_extents $file" $dev 2>/dev/null`;
@@ -340,8 +338,6 @@ sub debugfs_method
                         print "$extents\n" if ($DEBUG);
                 }
         }
-
-        #chomp($extents);
 }
 
 # Filesystem cluter (io_block_size) to LBA
@@ -450,7 +446,6 @@ sub printout
         my $OUT;
         print "printout: $file\n" if($DEBUG);
         open ($OUT,">>", "filetrace.$dev_str.$cpu_affinity.txt") ||  die("Failed to open filetrace.$dev_str.$cpu_affinity.txt");
-        #print $OUT "$file $range $contig\n";
         print $OUT "$file :: $extents\n";
         close($OUT);
 }
@@ -1831,13 +1826,15 @@ if ($mode eq "post")
         {
                 die("Failed to unpack input file: $tar_file");
         }
-        #$sector_size= `cat $fdisk_file | grep 'Sector size' | awk '{ print \$4 }'`;
         $sector_size=`cat $fdisk_file | grep 'Units'| awk '{ print \$9 }'`;
-        $total_lbas=`cat $fdisk_file | grep total | awk '{ print \$8 }'`;
+	my $lba_line = `cat $fdisk_file | grep "sectors\$"`;
+	print "$lba_line\n" if ($VERBOSE);
+	if ($lba_line =~ /(\d+) sectors$/) { $total_lbas=$1; }
         $dev = `cat $fdisk_file | grep Disk | awk '{ print \$2 }'| head -1 | tr ':' ' '`;
         chomp($dev);
         chomp($total_lbas);
         chomp($sector_size);
+	print "dev=$dev lbas=$total_lbas sec_size=$sector_size\n" if ($VERBOSE);
         $total_capacity_GiB = $total_lbas * $sector_size / $GiB;
         #print "lbas: $total_lbas sec_size: $sector_size total: $total_capacity_GiB GB\n";
         printf("lbas: %d sec_size: %d total: %0.2f GiB\n", $total_lbas, $sector_size, $total_capacity_GiB);
