@@ -1947,7 +1947,9 @@ if ($mode eq 'live')
         else
         {
                 $sector_size = `fdisk -l -u=sectors $dev 2>/dev/null| grep 'Units' | awk '{ print \$9 }'`;
-                $total_lbas  = `fdisk -l -u=sectors $dev | grep total | awk '{ print \$8 }'`;
+		my $lba_line = `fdisk -l -u=sectors $dev 2>/dev/null| grep "sectors\$"`;
+		if ($lba_line =~ /(\d+) sectors$/) { $total_lbas=$1; }
+		print "$lba_line\n" if ($DEBUG);
         }
  
         my $term_x = `tput cols` -$SCALEX;
