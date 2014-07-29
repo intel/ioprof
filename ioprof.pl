@@ -1598,7 +1598,7 @@ sub cleanup_files
 sub choose_color
 {
         my $num = shift;
-        if(!defined($num)|| $num == 0)
+        if(!defined($num)|| $num == -1 || $num == 0)
         {
                 $color_index=" ";
                 return $black;
@@ -1646,8 +1646,9 @@ sub get_value
                 my $i=$map[$_];
                 $sum += defined($i) ? $i : 0;
         }
-        my $value = $sum / $rate;
-        return int($value);
+	print "s=$sum " if($DEBUG);
+        #my $value = ($sum) ? $sum / $rate : -1;
+        return int($sum);
 }
 
 ### Print heatmap text on terminal (DEBUG ONLY)
@@ -1659,45 +1660,10 @@ sub print_map
         }
 }
 
-### Find maximum heatmap block value (sum of mulitple buckets)
-sub find_cap
-{
-        my $term_x = shift;
-        my $term_y = shift;
-        my $max_value = 0;
-        my $value = 0;
-        for (my $y=0; $y<$term_y; $y++)
-        {
-                for(my $x=0; $x<$term_x; $x++)
-                {
-                        my $index = $x + ($y * $term_x);
-                        my $value=0;
-                        if($rate > 1)
-                        {
-                                $value = get_value($index, $rate);
-                        }
-                        else
-                        {
-                                if(defined($map[$index]))
-                                {
-                                        $value = $map[$index];
-                                }
-                                else
-                                {
-                                        $value=0;
-                                }
-                        }
-                        if($value > $max_value) { $max_value = $value; }
-                }
-        }
-        return $max_value;
-}
-
 ### Draw heatmap on color terminal
 sub draw_heatmap
 {
         print "max_bucket_hits=$max_bucket_hits\n" if($DEBUG);
-        #print "cap=$cap choices=$choices vpc=$vpc max_bucket_hits=$max_bucket_hits\n" if($DEBUG);
         print_map() if ($DEBUG);
 
         my $pigeons = scalar(@map);
@@ -1752,6 +1718,9 @@ sub draw_heatmap
                         }
                         $cap = ($value > $cap) ? $value : $cap;
                         $block_map[$index]=$value;
+
+			print "v=$value " if ($DEBUG);
+			if ($x % 20 == 0) { print "\n" if($DEBUG); }
                         #my $color = choose_color($value);
                         #print "${color}$color_index";
                         #print "v=$value $color_index";
@@ -1761,9 +1730,9 @@ sub draw_heatmap
         }
 
         print "+" . "-" x $term_x . "-+\n";
-        #$cap = find_cap($term_x, $term_y);
+
         $vpc = int($cap / $choices) ? int($cap / $choices) : 1; # values per choice
-        print "cap=$cap vpc=$vpc pigeons=$pigeons holes=$holes rate=$rate max_bucket_hits=$max_bucket_hits\n" if($DEBUG);
+        print "cap=$cap vpc=$vpc pigeons=$pigeons holes=$holes rate=$rate max_bucket_hits=$max_bucket_hits\n" if($VERBOSE);
         for(my $y=0; $y<$term_y; $y++)
         {
                 print "|";
