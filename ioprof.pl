@@ -19,9 +19,11 @@
 my $VERSION = '2.0.4';
 print "$0 ($VERSION)\n";
 
-my $VERBOSE = 0;
-my $DEBUG   = 0;
-my $FASTFILE= 1;
+my $VERBOSE         = 0;
+my $DEBUG           = 0;
+my $FASTFILE        = 1;
+my $SINGLE_THREADED = 0;
+my $READAHEAD       = 1;
 
 use strict;
 use POSIX ":sys_wait_h";
@@ -76,9 +78,9 @@ my $tar_file;         # .tar file outputted from 'trace' mode
 my $fdisk_file;       # File capture of fdisk tool output
 my @pidlist;          # Multi-process PID array, to keep track
 
-my $top_files       = "";         # Top files list
-my $dev             = "";         # Device (e.g. /dev/sda1)
-my $dev_str         = "output";   # Device string (e.g. sda1 for /dev/sda1)
+my $top_files       = ""; # Top files list
+my $dev             = ""; # Device (e.g. /dev/sda1)
+my $dev_str         = ""; # Device string (e.g. sda1 for /dev/sda1)
 
 ### Unit Scales
 my $KiB             = 1024;
@@ -102,7 +104,8 @@ my $top_count_limit    = 10;         # How many files to list in Top Files list 
 my $thread_count       = 0;          # Thread count
 my $cpu_affinity       = 0;          # Tie each thread to a CPU for load balancing
 my $thread_max         = 128;        # Maximum thread count
-
+my $buffer_size        = 1024;       # blktrace buffer size
+my $buffer_count       = 8;          # blktrace buffer count
 
 ### Gnuplot Settings
 my $xwidth             = 800;        # gnuplot x-width
@@ -185,10 +188,12 @@ sub check_args
                 $VERBOSE=1;  # Enable verbose messaging, may slow things down
                 print "VERBOSE enabled\n";
         }
+
+	# Hidden DEBUG switch
 	if(defined($opt{'x'}))
 	{
                 $VERBOSE=1;  # Enable verbose messaging, may slow things down
-		$DEBUG=1; # Enable debug messaging, will slow things down
+		$DEBUG=1;    # Enable debug messaging, will slow things down
                 print "VERBOSE and DEBUG enabled\n";
 	}
 
@@ -203,29 +208,29 @@ sub check_args
 
                 $dev = $opt{'d'};
                 $runtime = $opt{'r'};
-                print "Runtime: $runtime\n" if ($DEBUG);
+                print "Dev: $dev Runtime: $runtime\n" if ($DEBUG);
 
                 $live=1;
                 if ($dev =~ /\/dev\/(\S+)/) { $dev_str = $1; }
                 $dev_str =~ s/\//_/g;
-                print "Option -d $dev\n" if($DEBUG);
                 print "str: $dev_str\n" if($DEBUG);
+		die("ERROR: dev_str=$dev_str invalid") if ($dev_str eq "");
 
                 # Check if $dev is not a block special file
-                if(! -b $dev)
-                {
-                        die("Cannot find $dev or $dev is not a block special file");
-                }
+        	die("ERROR: Cannot find $dev or $dev is not a block special file") if (! -b $dev);
         }
         elsif($mode eq 'post')
         {
                 # Check Args
                 if (!$opt{'t'}) { usage(); }
                 $tar_file = $opt{'t'};
+
                 if($tar_file =~ /(\S+).tar/)
                 {
                         $dev_str = $1;
                 }
+		die("ERROR: dev_str=$dev_str invalid") if ($dev_str eq "");
+
                 if ($opt{'p'})
                 {
                         check_pdf_prereqs();
@@ -236,11 +241,7 @@ sub check_args
                 print "Option -t $tar_file\n" if($DEBUG);
                 push(@files_to_cleanup, $fdisk_file);
 
-                if(! -f $tar_file)
-                {
-                        die("Cannot find $tar_file or $tar_file is not a plain file");
-                }
-
+                die("ERROR: Cannot find $tar_file or $tar_file is not a plain file") if (! -f $tar_file);
         }
         elsif($mode eq 'trace')
         {
@@ -259,12 +260,10 @@ sub check_args
                 $dev_str =~ s/\//_/g;
                 print "Option -d $dev\n" if($DEBUG);
                 print "str: $dev_str\n" if($DEBUG);
+		die("ERROR: dev_str=$dev_str invalid") if ($dev_str eq "");
 
-                # Check if $dev is a block special file
-                if(! -b $dev)
-                {
-                        die("Cannot find $dev or $dev is not a block special file");
-                }
+                # Check if $dev is not a block special file
+        	die("ERROR: Cannot find $dev or $dev is not a block special file") if (! -b $dev);
         }
         else
         {
@@ -278,11 +277,11 @@ sub check_args
 sub check_pdf_prereqs
 {
         `which gnuplot`;
-        if ($? != 0) { die("gnuplot not installed.  Please offload the trace file for processing."); }
+        if ($? != 0) { die("ERROR: gnuplot not installed.  Please offload the trace file for processing."); }
         `which pdflatex`;
-        if ($? != 0) { die("pdflatex not installed.  Please offload the trace file for processing."); }
+        if ($? != 0) { die("ERROR: pdflatex not installed.  Please offload the trace file for processing."); }
         `echo 'set terminal png' > pngtest.txt; gnuplot pngtest.txt >/dev/null 2>&1`;
-        if ($? != 0) { `rm -f pngtest.txt`; die("gnuplot PNG terminal not installed.  Please offload the trace file for processing."); }
+        if ($? != 0) { `rm -f pngtest.txt`; die("ERROR: gnuplot PNG terminal not installed.  Please offload the trace file for processing."); }
         `rm -f pngtest.txt`;
 }
 
@@ -290,9 +289,9 @@ sub check_pdf_prereqs
 sub check_trace_prereqs
 {
         `which blktrace`;
-        if ($? != 0) { die("blktrace not installed.  Please install blktrace"); }
+        if ($? != 0) { die("ERROR: blktrace not installed.  Please install blktrace"); }
         `which blkparse`;
-        if($? != 0) { die("blkparse not installed.  Please install blkparse"); }
+        if($? != 0) { die("ERROR: blkparse not installed.  Please install blkparse"); }
 }
 
 ### Check if debugfs is mounted
@@ -303,7 +302,7 @@ sub mount_debugfs
         {
                 print "Need to mount debugfs\n" if ($VERBOSE);
                 `mount -t debugfs debugfs /sys/kernel/debug`;
-                if($? !=0 ) { die("Failed to mount debugfs"); }
+                if($? !=0 ) { die("ERROR: Failed to mount debugfs"); }
                 print "mounted debugfs successfully\n" if ($VERBOSE);
         }
         return;
@@ -369,41 +368,113 @@ sub ioctl_method
         my $end=-1;
         my $prev=-1;
         my $cluster_id;
-        my $contig = "Contig";
+        #my $contig = "Contig";
 
 
-                print "#$file#\n" if ($DEBUG);
-                my $fs_cluster_size = `stat '$file' | grep "IO Block"| awk '{ print \$7 }'`;
-                my $file_blocks = `stat '$file' | grep Blocks | awk '{ print \$4 }'`;
-                my $file_size = -s $file;
-                my $io_blocks = ($file_blocks * $sector_size) / $fs_cluster_size;
-                if (!defined($fs_cluster_size) || $fs_cluster_size == 0) { return; }
-                my $file_clusters = ($file_blocks * $sector_size) / $fs_cluster_size;
+       print "#$file#\n" if ($DEBUG);
+       #my $fs_cluster_size = `stat '$file' | grep "IO Block"| awk '{ print \$7 }'`;
+       #my $file_blocks = `stat '$file' | grep Blocks | awk '{ print \$4 }'`;
 
-                open($FH, "<", $file) or die("Failed to open file $file");
+	my ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size, $atime,$mtime,$ctime,$blksize,$blocks) = stat($file);
+	my $fs_cluster_size = $blksize;
+	my $file_blocks = $blocks;
 
-                my $log_id_a = 0;
-                my $log_id_b = int($file_clusters);
-                my $arg_a = pack "I", $log_id_a;
-                my $arg_b = pack "I", $log_id_b;
-                ioctl($FH, $fibmap, $arg_a) or die "ioctl failed $!";
-                ioctl($FH, $fibmap, $arg_b) or die "ioctl failed $!";
-                my $cluster_id_a = unpack "I", $arg_a;
-                my $cluster_id_b = unpack "I", $arg_b;
-                if($file_clusters == ($cluster_id_b - $cluster_id_a))
+	my $file_size = -s $file;
+	my $io_blocks = ($file_blocks * $sector_size) / $fs_cluster_size;
+	if (!defined($fs_cluster_size) || $fs_cluster_size == 0) { return; }
+	my $file_clusters = ($file_blocks * $sector_size) / $fs_cluster_size;
+
+	open($FH, "<", $file) or die("ERORR: Failed to open file $file");
+
+	my $log_id_a = 0;
+	my $log_id_b = int($file_clusters);
+	my $arg_a = pack "I", $log_id_a;
+	my $arg_b = pack "I", $log_id_b;
+	ioctl($FH, $fibmap, $arg_a) or die("ERROR: ioctl failed $!");
+	ioctl($FH, $fibmap, $arg_b) or die("ERROR: ioctl failed $!");
+	my $cluster_id_a = unpack "I", $arg_a;
+	my $cluster_id_b = unpack "I", $arg_b;
+	if($file_clusters == ($cluster_id_b - $cluster_id_a))
+	{
+		close($FH);
+		my $start_lba = fs_cluster_to_lba($fs_cluster_size, $sector_size, $cluster_id_a);
+		my $end_lba   = fs_cluster_to_lba($fs_cluster_size, $sector_size, $cluster_id_b);
+		$output = "$start_lba:$end_lba";
+		return;
+	}
+
+	if ($READAHEAD)
+	{
+		my $log_id = 0;
+		my $skip   = 1;
+		my $prev_log_id = -1;
+		while ($log_id <= int($file_clusters))
+		{
+                        my $arg = pack "I", $log_id;
+                        ioctl($FH, $fibmap, $arg) or die("ERROR: ioctl failed $!");
+                        if($? != 0) { next; }
+                        $cluster_id = unpack "I", $arg;
+                        print "$file : log=$log_id prev=$prev_log_id : cid=$cluster_id previd=$prev: skip=$skip\n" if ($DEBUG);
+			
+
+                        if ($start == -1)
+                        {
+                                $start = fs_cluster_to_lba($fs_cluster_size, $sector_size, $cluster_id);
+                                $output .= "$start:";
+                        }
+
+                        if ($cluster_id == ($prev + $skip))
+                        {
+                                print "Contig!\n" if ($DEBUG);
+				$prev_log_id = $log_id;
+                        	$prev = $cluster_id;
+
+				# Keep doubling readahead value (aka skip)
+				$skip = ($skip == (1<<16)) ? 32 : $skip << 1;
+
+				$log_id += $skip;
+				next;
+                        }
+			elsif(($skip != 1) && ($prev != -1))
+			{
+				print "Not Contig, skip miss, skip=$skip\n" if ($DEBUG);
+				$log_id = $prev_log_id;
+				$skip = 1;
+			}
+                        elsif($prev != -1)
+                        {
+                                my $prev_lba = fs_cluster_to_lba($fs_cluster_size, $sector_size, $prev);
+                                my $curr_lba = fs_cluster_to_lba($fs_cluster_size, $sector_size, $cluster_id);
+
+                                if($prev_lba != 0)
+                                {
+                                        $output .= "$prev_lba ";
+                                }
+                                if($cluster_id != 0)
+                                {
+                                        $output .= "$curr_lba:";
+                                }
+                                print "Not Contig, skip=$skip\n" if ($DEBUG);
+                                #$contig = "Not Contig";
+                        }
+
+                        $prev = $cluster_id;
+			$log_id += $skip;
+		}
+
+                $end = fs_cluster_to_lba($fs_cluster_size, $sector_size, $cluster_id);
+                if ($end != 0)
                 {
-                        close($FH);
-                        my $start_lba = fs_cluster_to_lba($fs_cluster_size, $sector_size, $cluster_id_a);
-                        my $end_lba   = fs_cluster_to_lba($fs_cluster_size, $sector_size, $cluster_id_b);
-                        $output = "$start_lba:$end_lba";
-                        return;
+                        $output .= "$end";
                 }
-
+	}
+	else
+	{
                 for (0 .. int($file_clusters))
                 {
                         my $log_id = $_;
                         my $arg = pack "I", $log_id;
-                        ioctl($FH, $fibmap, $arg) or die "ioctl failed $!";
+                        ioctl($FH, $fibmap, $arg) or die("ERROR: ioctl failed $!");
                         if($? != 0) { next; }
                         $cluster_id = unpack "I", $arg;
                         print "$file : $log_id : $cluster_id\n" if ($DEBUG);
@@ -431,7 +502,7 @@ sub ioctl_method
                                         $output .= "$curr_lba:";
                                 }
                                 print "Not Contig\n" if ($DEBUG);
-                                $contig = "Not Contig";
+                                #$contig = "Not Contig";
                         }
                         $prev = $cluster_id;
                 }
@@ -440,8 +511,11 @@ sub ioctl_method
                 {
                         $output .= "$end";
                 }
-                close($FH);
-                $extents = $output;
+	}
+
+	close($FH);
+	print "$output\n" if ($DEBUG);
+	$extents = $output;
 
 }
 
@@ -451,7 +525,7 @@ sub printout
         my $file = shift;
         my $OUT;
         print "printout: $file\n" if($DEBUG);
-        open ($OUT,">>", "filetrace.$dev_str.$cpu_affinity.txt") ||  die("Failed to open filetrace.$dev_str.$cpu_affinity.txt");
+        open ($OUT,">>", "filetrace.$dev_str.$cpu_affinity.txt") ||  die("ERROR: Failed to open filetrace.$dev_str.$cpu_affinity.txt");
         print $OUT "$file :: $extents\n";
         close($OUT);
 }
@@ -478,7 +552,7 @@ sub block_ranges
         }
         else
         {
-                die("$mounttype is not supported yet");
+                die("ERROR: $mounttype is not supported yet");
         }
 
         printout($file);
@@ -507,7 +581,7 @@ sub find_all_files
         {
                 my $FH;
                 `find $mountpoint -xdev -name "*" > ioprof_files.$dev_str.txt`;
-                open($FH, "<", "ioprof_files.$dev_str.txt") or die("Failed to open file ioprof_files.$dev_str.txt");
+                open($FH, "<", "ioprof_files.$dev_str.txt") or die("ERROR: Failed to open file ioprof_files.$dev_str.txt");
                 while (<$FH>)
                 {
                         push(@FILES, $_);
@@ -526,74 +600,100 @@ sub find_all_files
         my $set_count = int($file_count / $cpu_count) + 1;
         print "set_count=$set_count\n" if ($DEBUG);
 
-        for(0 .. ($cpu_count-1))
-        {
-                $cpu_affinity = $_ % $cpu_count;
-                print "$cpu_affinity\n" if ($DEBUG);
-                my $pid = fork();
-                if($pid < 0)
-                {
-                        # Failed to fork
-                        die "Failed to fork process\n";
-                }
-                elsif($pid == 0)
-                {
-                        # Child process
-                        my $start = 0 + ($set_count * $cpu_affinity);
-                        if($start > $file_count) {exit; }
-                        my $end = ($set_count * ($cpu_affinity + 1)) - 1;
-                        $end = ($end >= $file_count) ? $file_count : $end;
-                        print "$cpu_affinity: start=$start end=$end\n" if ($VERBOSE);
-                        my $range = $end - $start;
-                        #if ($range == 0) { exit; }
-                        my $k = 0;
-
-                        for ($start .. $end)
+	if($SINGLE_THREADED)
+	{
+		my $k = 0;
+        	for (0 .. $file_count)
+        	{
+        		my $progress = $_ / $file_count * 100;
+                	if ($k > 100)
                         {
-                                if ($range >0)
-                                {
-                                        my $progress = ($_ - $start) / $range * 100;
-                                        if ($k > 100)
-                                        {
-                                                printf "\r%05.2f%% COMPLETE", $progress;
-                                                $k =0;
-                                        }
-                                        $k++;
-                                }
-                                my $file = $FILES[$_];
-                                if (defined $file)
-                                {
-                                        chomp($file);
-                                        print "$cpu_affinity: $file\n" if($DEBUG);
-
-                                        block_ranges($file);
-                                }
+                        	printf "\r%05.2f%% COMPLETE", $progress;
+                        	$k =0;
                         }
-                        exit;
-                }
-                else
-                {
-                        # Parent process
-                        print "pid=$pid CPU=$cpu_affinity\n" if ($DEBUG);
-                        push(@pidlist, $pid);
-                        my $hexcpu = sprintf("0x%08x", (1 << $cpu_affinity));
-                        print "hexcpu=$hexcpu\n" if ($DEBUG);
-                        `taskset -p $hexcpu $pid`;
-                        print "running $cpu_affinity\n" if ($DEBUG);
-                }
-        }
+                        $k++;
+                        my $file = $FILES[$_];
+                        if (defined $file)
+                        {
+				chomp($file);
+				print "$file\n" if($DEBUG);
 
+				block_ranges($file);
+                        }
+		}
+	}
+	else
+	{
 
-        print "\n\nWaiting on threads to finish\n\n";
-        foreach my $pid (@pidlist)
-        {
-                do
-                {
-                        print("\rWaiting on $pid                   ");
-                } while (!waitpid($pid, 0));
-        }
-        print "\nDONE!\n";
-        print "Compressing files\n";
+        	for(0 .. ($cpu_count-1))
+        	{
+                	$cpu_affinity = $_ % $cpu_count;
+                	print "$cpu_affinity\n" if ($DEBUG);
+                	my $pid = fork();
+                	if($pid < 0)
+                	{
+                        	# Failed to fork
+                        	die("ERROR: Failed to fork process\n");
+                	}
+                	elsif($pid == 0)
+                	{
+                        	# Child process
+                        	my $start = 0 + ($set_count * $cpu_affinity);
+                        	if($start > $file_count) {exit; }
+                        	my $end = ($set_count * ($cpu_affinity + 1)) - 1;
+                        	$end = ($end >= $file_count) ? $file_count : $end;
+                        	print "$cpu_affinity: start=$start end=$end\n" if ($VERBOSE);
+				my $range = $end - $start;
+	
+                        	#if ($range == 0) { exit; }
+                        	my $k = 0;
+	
+                        	for ($start .. $end)
+                        	{
+                                	if ($range >0)
+                                	{
+                                        	my $progress = ($_ - $start) / $range * 100;
+                                        	if ($k > 100)
+                                        	{
+                                                	printf "\r%05.2f%% COMPLETE", $progress;
+                                                	$k =0;
+                                        	}
+                                        	$k++;
+                                	}
+                                	my $file = $FILES[$_];
+                                	if (defined $file)
+                                	{
+                                        	chomp($file);
+                                        	print "$cpu_affinity: $file\n" if($DEBUG);
+	
+                                        	block_ranges($file);
+                                	}
+                        	}
+                        	exit;
+                	}
+                	else
+                	{
+                        	# Parent process
+                        	print "pid=$pid CPU=$cpu_affinity\n" if ($DEBUG);
+                        	push(@pidlist, $pid);
+                        	my $hexcpu = sprintf("0x%08x", (1 << $cpu_affinity));
+                        	print "hexcpu=$hexcpu\n" if ($DEBUG);
+                        	`taskset -p $hexcpu $pid`;
+                        	print "running $cpu_affinity\n" if ($DEBUG);
+                	}
+        	}
+
+        	print "\n\nWaiting on threads to finish\n\n";
+        	foreach my $pid (@pidlist)
+        	{
+                	do
+                	{
+                        	print("\rWaiting on $pid                   ");
+                	} while (!waitpid($pid, 0));
+        	}
+        	print "\nDONE!\n";
+        	print "Compressing files\n";
+	}
         `gzip --fast filetrace.*`;
 }
 
@@ -723,7 +823,7 @@ sub print_results
 
         if($pdf_report)
         {
-                open($DATA, ">data.$dev_str.$num") || die ("Could not open: data");
+                open($DATA, ">data.$dev_str.$num") || die ("ERROR: Could not open: data");
         }
 
         for($i=0; $i<$num_buckets; $i++)
@@ -781,8 +881,8 @@ sub print_results
         my $tot=0;
         if($pdf_report)
         {
-                open($DATA, ">histogram_iops.$dev_str.$num") || die("Could not open: histogram_iops.$dev_str.$num");
-                open($DATA2, ">histogram_bw.$dev_str.$num") || die("Could not open: histogram_bw.$dev_str.$num");
+                open($DATA, ">histogram_iops.$dev_str.$num") || die("ERROR: Could not open: histogram_iops.$dev_str.$num");
+                open($DATA2, ">histogram_bw.$dev_str.$num") || die("ERROR: Could not open: histogram_bw.$dev_str.$num");
         }
 
         # %counts is a hash
@@ -974,7 +1074,7 @@ sub print_header_heatmap
         push(@files_to_cleanup, "header_heatmap.$dev_str.$num", "heatmap_${dev_str}_${num}.png");
 
         `gnuplot header_heatmap.$dev_str.$num`;
-        if($? != 0 ) { die("Failed to run gnuplot header_heatmap.$dev_str.$num Error: $!"); }
+        if($? != 0 ) { die("ERROR: Failed to run gnuplot header_heatmap.$dev_str.$num Error: $!"); }
 
         print "ph iot=$io_total\n" if ($DEBUG);
 } # print_header
@@ -1011,7 +1111,7 @@ sub print_header_histogram_iops
         push(@files_to_cleanup, "header_histogram_iops.$dev_str.$num", "histogram_iops_${dev_str}_${num}.png");
 
         `gnuplot header_histogram_iops.$dev_str.$num`;
-        if($? != 0 ) { die("Failed to run gnuplot header_histogram_iops.$dev_str.$num Error: $!"); }
+        if($? != 0 ) { die("ERROR: Failed to run gnuplot header_histogram_iops.$dev_str.$num Error: $!"); }
 
 } # print_header_histogram_iops
 
@@ -1043,7 +1143,7 @@ sub print_header_stats_iops
         push(@files_to_cleanup, "header_stats_iops.$dev_str.$num", "stats_iops_${dev_str}_${num}.png");
 
         `gnuplot header_stats_iops.$dev_str.$num`;
-        if($? != 0 ) { die("Failed to run gnuplot header_histogram_iops.$dev_str.$num Error: $!"); }
+        if($? != 0 ) { die("ERROR: Failed to run gnuplot header_histogram_iops.$dev_str.$num Error: $!"); }
 
 } # print_header_histogram_iops
 
@@ -1101,7 +1201,7 @@ sub create_report
         close($LATEX);
 
         `pdflatex -interaction batchmode report.$dev_str.tex`;
-        if($? != 0 ) { die("Failed to run report Error: $!"); }
+        if($? != 0 ) { die("ERROR: Failed to run report Error: $!"); }
 
         `rm -f report.$dev_str.tex`;
         `rm -f report.$dev_str.aux`;
@@ -1695,8 +1795,6 @@ if ($mode eq "live" || $mode eq "trace")
 }
 
 
-        my $buffer_size=1024;
-        my $buffer_count=8;
 ### Get block count and logical block size
 if($mode eq 'trace')
 {
@@ -1707,7 +1805,7 @@ if($mode eq 'trace')
 
         ### Check if sudo permissions
         `sudo -v`;
-        if($? != 0 ) { die "You need to have sudo permissions to collect all necessary data.  Please run from a privilaged account."; }
+        if($? != 0 ) { die("ERROR: You need to have sudo permissions to collect all necessary data.  Please run from a privilaged account."); }
 
         ### Save fdisk info
         print "Running fdisk\n" if ($DEBUG);
@@ -1745,7 +1843,7 @@ if($mode eq 'trace')
                         print "kernel version in order to get this working.\n\n";
                         print "If you are using a differnt distro or custom kernel, you may need to rebuild your kernel with the 'CONFIG_BLK 1f40 _DEV_IO_TRACE'\n";
                         print "option enabled.  This should allow blktrace to function\n";
-                        die("Could not run blktrace");
+                        die("ERROR: Could not run blktrace");
                 }
 
                 $pid = fork();
@@ -1787,7 +1885,7 @@ if($mode eq 'trace')
         my $filetrace = "";
         if ($trace_files) { $filetrace = "filetrace.$dev_str.*.txt.gz"; }
         `tar -cf $tarball_name blk.out.$dev_str.*.gz fdisk.$dev_str $filetrace`;
-        if ($? != 0) { die ("failed to tarball $tarball_name"); }
+        if ($? != 0) { die ("ERROR: failed to tarball $tarball_name"); }
         print "\rCleaning up leftover files                         ";
         `rm -f blk.out.$dev_str.*.gz`;
         `rm -f fdisk.$dev_str`;
@@ -1830,7 +1928,7 @@ if ($mode eq "post")
         `tar -xvf $tar_file`;
         if($?)
         {
-                die("Failed to unpack input file: $tar_file");
+                die("ERROR: Failed to unpack input file: $tar_file");
         }
         $sector_size=`cat $fdisk_file | grep 'Units'| awk '{ print \$9 }'`;
 	my $lba_line = `cat $fdisk_file | grep "sectors\$"`;
@@ -1937,7 +2035,7 @@ if ($mode eq "post")
 
 if ($mode eq 'live')
 {
- 
+	$timeout=1; 
         my $fdisk_version = `fdisk -v`;
         if($fdisk_version =~ /util-linux-ng/)
         {
