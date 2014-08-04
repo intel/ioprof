@@ -49,6 +49,7 @@ my %files_to_lbas     :shared; # Files and the lba ranges associated with them
 my $max_bucket_hits   :shared; # The hottest bucket
 my @bucket_to_files   :shared; # List of files that reside on each bucket
 my $TERM              :shared = 0; # Thread pool done with work
+my $trace_files       :shared = 0; # Map filesystem files to block LBAs
 
 ### Semaphores: These are the locks for the shared variables
 my $read_semaphore;            # Lock for the global read hit array
@@ -61,6 +62,7 @@ my $files_to_lbas_semaphore;   # Lock for the global file->lba mapping hash
 my $max_bucket_hits_semaphore; # Lock for the global maximum hits per bucket
 my $bucket_to_files_semaphore; # Lock for the global bucket_to_files;
 my $term_semaphore;            # Lock for the global TERM;
+my $trace_files_semaphore;     # Lock for the global trace_files;
 
 ### Thread Queue
 my $IDLE_QUEUE = Thread::Queue->new();
@@ -106,7 +108,6 @@ my $live               = 0;          # Live mode 0=disabled, 1=enabled (command 
 my $percent            = 0.020;      # Histogram threshold for each level (e.g. 0.02% of total drive size)
 my $total_capacity_GiB = 0;          # Total drive capacity
 my $mode               = "unknown";  # Processing mode (live, trace, post)
-my $trace_files        = 0;          # Map filesystem files to block LBAs
 my $pdf_report         = 0;          # Generate a PDF report instead of a text report
 my $top_count_limit    = 10;         # How many files to list in Top Files list (e.g. Top 10 files)
 my $thread_count       = 0;          # Thread count
@@ -1036,6 +1037,7 @@ sub print_results
         }
 
         # Print top hit files by sorting hash in numerical order by value
+	print "Trace_files: $trace_files\n";
         if($trace_files)
         {
                 my $top_count=0;
@@ -1815,8 +1817,10 @@ sub worker
                 elsif ($file =~ /(filetrace.\S+.\S+.txt).gz/)
                 {
                         my $new_file = $1;
-                        $trace_files = 1;
-                        print "\nFound some filetrace files\n" if ($DEBUG);
+			$trace_files_semaphore->down();
+                        	$trace_files = 1;
+			$trace_files_semaphore->up();
+                        print "\nFound some filetrace files $trace_files\n" if ($DEBUG);
                         parse_filetrace($new_file, $tid);
                 }
 	} while (!$TERM);
@@ -1952,6 +1956,7 @@ $files_to_lbas_semaphore = Thread::Semaphore->new();
 $max_bucket_hits_semaphore = Thread::Semaphore->new();
 $bucket_to_files_semaphore = Thread::Semaphore->new();
 $term_semaphore = Thread::Semaphore->new();
+$trace_files_semaphore = Thread::Semaphore->new();
 
 if ($mode eq "post")
 {
