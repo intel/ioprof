@@ -24,7 +24,7 @@ my $DEBUG           = 0;
 my $FASTFILE        = 1;
 my $SINGLE_THREADED = 0;
 my $READAHEAD       = 1;
-my $THREAD_POOL     = 1;
+my $THREAD_POOL     = 0;
 
 use strict;
 use POSIX ":sys_wait_h";
@@ -98,7 +98,7 @@ my $MiB             = 1048576;
 my $GiB             = 1073741824;
 
 ### Config Settings
-my $bucket_size        = 10 * $MiB;   # Size of the bucket for totaling I/O counts (e.g. 1MB buckets)
+my $bucket_size        = 1 * $MiB;   # Size of the bucket for totaling I/O counts (e.g. 1MB buckets)
 my $num_buckets        = 1;          # Number of total buckets for this device
 my $timeout            = 3;          # Seconds between each print
 my $runtime            = 0;          # Runtime for 'live' and 'trace' modes
@@ -151,13 +151,11 @@ my $color_index;              # Index in heatmap array
 my $choices=scalar(@colors);  # Number of color choices
 my $vpc;                      # VPC=Values Per Choice.  IOPS Range for each color
 my $cap=0;                    # Maximum IOPS per heatmap block
-#my @map;                      # IOPS map
 my $rate;                     # How densely we pack buckets into heatmap blocks
 my @block_map;                # Heatmap to print
 
 ### File Mapping Globals
 my $fibmap       = 1;                   # FIBMAP ioctl number
-my @ignorelist   = ("/sys", "/proc");   # Filesystem ignore list
 my $extents;                            # EXT extents
 my $mounttype;                          # Filesystem type (e.g. ext4)
 my $mountpoint;                         # Mountpoint
@@ -614,9 +612,9 @@ sub find_all_files
 		my $k = 0;
         	for (0 .. $file_count)
         	{
-        		my $progress = $_ / $file_count * 100;
                 	if ($k > 100)
                         {
+        			my $progress = $_ / $file_count * 100;
                         	printf "\r%05.2f%% COMPLETE", $progress;
                         	$k =0;
                         }
@@ -729,7 +727,6 @@ sub bucket_to_file_list
 sub file_to_buckets
 {
         my $k=0;
-        my @threads;
         my $size = scalar(keys %files_to_lbas);
 
         foreach my $file (keys %files_to_lbas)
@@ -1037,7 +1034,7 @@ sub print_results
         }
 
         # Print top hit files by sorting hash in numerical order by value
-	print "Trace_files: $trace_files\n";
+	print "Trace_files: $trace_files\n" if ($DEBUG);
         if($trace_files)
         {
                 my $top_count=0;
@@ -1778,25 +1775,15 @@ sub draw_heatmap
 sub worker
 {
 	my ($work_q) = @_;
-	# This thread's ID
-	my $tid = threads->tid();
-	#print "tid $tid started\n" if ($VERBOSE);
+	my $tid = threads->tid(); # Thread ID
+	print "tid $tid started\n" if ($DEBUG);
 
 	do
 	{
-        	# Indicate that were are ready to do work
-        	#printf("Idle     -> %2d\n", $tid);
-        	#$IDLE_QUEUE->enqueue($tid);
-	
-        	# Wait for work from the queue
-		my $tasks;
-		#$tasks = $work_q->pending();
-		#print "t=$tasks\n";
+		# Non-blocking check for work
         	my $file = $work_q->dequeue_nb();
-		#$tasks = $work_q->pending();
-		#print "t=$tasks\n";
 	
-        	# If no more work, exit
+        	# If no more work, exit thread
         	if (!defined($file ))
 		{
         		$term_semaphore->down();
@@ -1805,10 +1792,9 @@ sub worker
 			print "Finished with work queue\n" if($DEBUG);
 			return;
 		}
-	#
-        	# Do some work while monitoring $TERM
-		print "started file $file, left=$tasks\n" if ($DEBUG);
-        	#printf("Working  -> %2d\n", $tid);
+
+		print "started file $file\n" if ($DEBUG);
+
                 if ($file =~ /(blk.out.\S+).gz/)
                 {
                         my $new_file = $1;
@@ -1824,11 +1810,10 @@ sub worker
                         parse_filetrace($new_file, $tid);
                 }
 	} while (!$TERM);
+
 	print "tid: $tid finished\n" if ($DEBUG);
 	return;
-
 }
-
 
 
 ############
@@ -1843,7 +1828,6 @@ if ($mode eq "live" || $mode eq "trace")
 {
         mount_debugfs();
 }
-
 
 ### Get block count and logical block size
 if($mode eq 'trace')
@@ -2008,140 +1992,79 @@ if ($mode eq "post")
         print "Time to parse.  Please wait...\n";
         my $size = scalar(@file_list);
 
-my $q;
-if($THREAD_POOL && !$SINGLE_THREADED)
-{
-	my %work_queues;
-	$q = Thread::Queue->new();
-
-
-        #foreach my $file (@file_list)
-        ##{
-                #$file_count++;
-                #chomp($file);
-                #printf "\rInput Percent: %d %% (File %d of %d)", ($file_count*100 / $size), $file_count, $size;
-                # Wait for an available thread
-
-                # Check for termination condition
-                #last if ($tid < 0);
-
-                # Give the thread some work to do
-		#$q->enqueue($file);
-
-                #$work_queues{$tid}->enqueue($file) or die("enqueue failed: $!");
-        #}
-	$q->enqueue(@file_list);
-
-        for(my $i=0; $i<$cpu_count; $i++)
-        {
-                #my $wq = Thread::Queue->new();
-                my $t = threads->create('worker', $q);
-                push(@threads, $t);
-
-                #$work_queues{$t->tid()} = $wq;
-        }
-
-
-
-
-
-if(0)
-{
-	for(my $i=0; $i<$cpu_count; $i++)
+	my $q;
+	if($THREAD_POOL && !$SINGLE_THREADED)
 	{
-		my $wq = Thread::Queue->new();
-		my $t = threads->create('worker', $wq);
-		push(@threads, $t);
+		my %work_queues;
+		$q = Thread::Queue->new();
+		$q->enqueue(@file_list);
 
-		$work_queues{$t->tid()} = $wq;
+        	for(my $i=0; $i<$cpu_count; $i++)
+        	{
+                	my $t = threads->create('worker', $q);
+                	push(@threads, $t);
+        	}
 	}
-
-	foreach my $file (@file_list)
+	else
 	{
-		$file_count++;
-		chomp($file);
-		printf "\rInput Percent: %d %% (File %d of %d)\n", ($file_count*100 / $size), $file_count, $size;
-                # Wait for an available thread
-                my $tid = $IDLE_QUEUE->dequeue();
-		if ($tid < 0 ) { die ("tid $tid: $!"); }
 
-                # Check for termination condition
-                #last if ($tid < 0);
-
-                # Give the thread some work to do
-		my $tasks = $work_queues{$tid}->pending();
-		print "tid: $tid, file: $file tasks: $tasks\n" if($VERBOSE);
-		
-                #$work_queues{$tid}->enqueue($file) or die("enqueue failed: $!");
-		sleep(3);
-	}
-
-        # Signal all threads that there is no more work
-        #$work_queues{$_}->enqueue(-1) foreach keys(%work_queues);
-	$work_queues{$_}->end() foreach keys(%work_queues);
-}
-
-}
-else
-{
-
-        foreach my $file (@file_list)
-        {
-		printf "\rInput Percent: %d %% (File %d of %d)", ($file_count*100 / $size), $file_count, $size;
-                #print "\r$file_count of $size\n";
-                if ($file =~ /(blk.out.\S+).gz/)
-                {
-                        my $new_file = $1;
-                        $file_count++;
-
-			if($SINGLE_THREADED)
-			{
-                                thread_parse($new_file, $file_count);
-			}
-			else
-			{
-                        	my $t=threads->new(\&thread_parse, $new_file, $file_count);
-                        	push(@threads, $t);
-			}
-                        #thread_parse($new_file, $file_count);
-                }
-                elsif ($file =~ /(filetrace.\S+.\S+.txt).gz/)
-                {
-                        my $new_file = $1;
-                        $file_count++;
-                        #`gunzip $file`;
-                        $trace_files = 1;
-                        print "\nFound some filetrace files\n" if ($DEBUG);
-			if($SINGLE_THREADED)
-			{
-                        	parse_filetrace($new_file, $file_count);
-			}
-			else
-			{
-                        	my $t=threads->new(\&parse_filetrace, $new_file, $file_count);
-                        	push(@threads, $t);
-			}
-                }
-		if(!$SINGLE_THREADED)
-		{
-                	if(scalar @threads > $thread_max)
+        	foreach my $file (@file_list)
+        	{
+			printf "\rInput Percent: %d %% (File %d of %d)", ($file_count*100 / $size), $file_count, $size;
+                	#print "\r$file_count of $size\n";
+                	if ($file =~ /(blk.out.\S+).gz/)
                 	{
-                        	printf "\rInput Percent: %d %% (File %d of %d)", ($file_count*100 / $size), $file_count, $size;
-                        	foreach my $x (0 .. $#threads)
-                        	{
-                                	if(defined($threads[$x]))
-                                	{
-                                        	if($threads[$x]->is_joinable())
-                                        	{
-                                                	my $name = $threads[$x]->join();
-                                                	delete ($threads[$x]);
-                                        	}
-                                	}
-                        	}
+                        	my $new_file = $1;
+                        	$file_count++;
+	
+				if($SINGLE_THREADED)
+				{
+                                	thread_parse($new_file, $file_count);
+				}
+				else
+				{
+                        		my $t=threads->new(\&thread_parse, $new_file, $file_count);
+                        		push(@threads, $t);
+				}
+                        	#thread_parse($new_file, $file_count);
                 	}
-		}
-        }
-}
+                	elsif ($file =~ /(filetrace.\S+.\S+.txt).gz/)
+                	{
+                        	my $new_file = $1;
+                        	$file_count++;
+                        	#`gunzip $file`;
+                        	$trace_files = 1;
+                        	print "\nFound some filetrace files\n" if ($DEBUG);
+				if($SINGLE_THREADED)
+				{
+                        		parse_filetrace($new_file, $file_count);
+				}
+				else
+				{
+                        		my $t=threads->new(\&parse_filetrace, $new_file, $file_count);
+                        		push(@threads, $t);
+				}
+                	}
+			if(!$SINGLE_THREADED)
+			{
+                		if(scalar @threads > $thread_max)
+                		{
+                        		printf "\rInput Percent: %d %% (File %d of %d)", ($file_count*100 / $size), $file_count, $size;
+                        		foreach my $x (0 .. $#threads)
+                        		{
+                                		if(defined($threads[$x]))
+                                		{
+                                        		if($threads[$x]->is_joinable())
+                                        		{
+                                                		my $name = $threads[$x]->join();
+                                                		delete ($threads[$x]);
+                                        		}
+                                		}
+                        		}
+                		}
+			}
+        	}
+	}
 
 	
 	if($SINGLE_THREADED)
@@ -2223,7 +2146,6 @@ if ($mode eq 'live')
         $total_capacity_GiB = $total_lbas * $sector_size / $GiB;
         print "lbas: $total_lbas sec_size: $sector_size total: $total_capacity_GiB GB\n";
 
-        #$num_buckets = int($total_lbas * $sector_size / $bucket_size);
         $num_buckets = `tput cols` * `tput lines`;
         $bucket_size = $total_lbas * $sector_size / $num_buckets;
 
@@ -2266,7 +2188,6 @@ if ($mode eq 'live')
                 undef(%thread_reads);
                 undef(%thread_writes);
                 undef($thread_max_bucket_hits);
-                #undef(@map);
 		undef(@reads);
 		undef(@writes);
 		undef(%r_totals);
