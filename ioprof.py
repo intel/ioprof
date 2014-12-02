@@ -24,18 +24,16 @@ import multiprocessing
 class global_variables:
 	#VERBOSE   = False
 	def __init__(self):
-		self.verbose           = False
-		self.debug             = False
-		self.single_threaded   = False
-		self.manager           = Manager()
+		self.verbose           = False                       # Verbose logging (-v flag)
+		self.debug             = False                       # Debug log level (-x flag)
+		self.single_threaded   = False                       # Single threaded for debug/profiling
+		self.manager           = Manager()                   # Multiprocess sync object
 
 		self.io_total          = Value('L', 0)               # Number of total I/O's
 		self.read_total        = Value('L', 0)               # Number of buckets read (1 I/O can touch many buckets)
 		self.write_total       = Value('L', 0)               # Number of buckets written (1 I/O can touch many buckets)
 		self.reads             = self.manager.dict()         # Array of read hits by bucket ID
 		self.writes            = self.manager.dict()         # Array of write hits by bucket ID
-		#self.reads             = Array('i', range(10))         # Array of read hits by bucket ID
-		#self.writes            = Array('i', range(10))        # Array of write hits by bucket ID
 		self.r_totals          = self.manager.dict()         # Hash of read I/O's with I/O size as key
 		self.w_totals          = self.manager.dict()         # Hash of write I/O's with I/O size as key
 		self.bucket_hits_total = Value('L', 0)               # Total number of bucket hits (not the total buckets)
@@ -377,7 +375,7 @@ def ioctl_method(g, file):
 def printout(g, file):
 	debug_print(g, "printout: " + file)
 	cpu_affinity = 0
-	filetrace = "filetrace." + g.device_str + "." + cpu_affinity + ".txt"
+	filetrace = "filetrace." + g.device_str + "." + str(cpu_affinity) + ".txt"
 	fo = open(filetrace, "a")
 	try:
 		fo.write(file + " :: " + g.extents)
@@ -409,7 +407,11 @@ def block_ranges(g, file):
 
 def find_all_files(g):
 	files = []
+	print "FIND ALL FILES"
 	os.system("rm -f filetrace.* &>/dev/null")
+	cpu_affinity = 0
+	filetrace = "filetrace." + g.device_str + "." + str(cpu_affinity) + ".txt"
+	os.system("touch " + filetrace)
 	cmd = "cat /proc/cpuinfo | grep processor | wc -l"
 	(rc, cpu_count) = run_cmd(g, cmd)
 
@@ -417,6 +419,7 @@ def find_all_files(g):
 	(rc, mountpoint) = run_cmd(g, cmd)
 	if rc != 0:
 		print g.device + " not mounted"
+		os.system("gzip --fast filetrace.* &>/dev/null")
 		return
 	verbose_print(g, "mountpoint: " + mountpoint)
 
@@ -459,8 +462,6 @@ def bucket_to_file_list(g, bucket_id):
 		 list = g.bucket_to_files[bucket_id]
 	except:
 		pass
-	#except:
-		#print "ERROR: bucket_to_file_list problem"
 	return list
 # bucket_to_file_list (DONE)
 
@@ -484,7 +485,10 @@ def file_to_buckets(g):
 				continue # TODO
 			debug_print(g, 'r(' + str(x) + ')=' + range)
 			x+=1
-			(start, finish) = range.split(':')
+			try:
+				(start, finish) = range.split(':')
+			except:
+				continue
 			debug_print(g, file + " start=" + start + ", finish=" + finish)
 			if start == '' or finish == '':
 				continue
@@ -583,23 +587,13 @@ def print_results(g):
 
 		r=0
 		if i in g.reads:
-				#pass
 			r=g.reads[i]
 		w=0
 		if i in g.writes:
-				#pass
 			w=g.writes[i]
-		#else:
-			#r = g.reads.get(i, 0)
-			#w = g.writes.get(i, 0)
-			
-		#i+=1 
-		#continue
 
 		bucket_total = r + w
 		bw_total += bucket_total * g.bucket_size
-		#if bucket_total > 0:
-			#debug_print(g, str(i) + ": bt=" + str(bucket_total))
 		if g.trace_files:
 			add_file_hits(g, i, bucket_total)
 		if bucket_total in counts:
@@ -853,37 +847,24 @@ def total_thread_counts (g, num):
 	debug_print(g, "Thread " + str(num) + " releasing write_totals lock t=" + str(g.thread_write_total) + " g=" + str(g.write_total.value))
 	g.write_totals_semaphore.release()
 
-	#debug_print(g, "Thread " + str(num) + " has read lock.")
 	g.read_semaphore.acquire()
+	debug_print(g, "Thread " + str(num) + " has read lock.")
 	for bucket,value in g.thread_reads.iteritems():
 		try:
 			g.reads[bucket] += value
 		except:
 			g.reads[bucket] = value
 		debug_print(g, "Thread " + str(num) + " has read lock.  Bucket=" + str(bucket) + " Value=" + str(value) + " g.reads[bucket]=" + str(g.reads[bucket]))
-		#pass
-		#if bucket in g.reads:
-			#g.reads[bucket] += g.thread_reads[bucket]
-		#else:
-			#g.reads[bucket] = g.thread_reads[bucket]
-		#debug_print(g, "Thread " + str(num) + " has read lock t=" + str(g.thread_reads[bucket]) + " g=" + str(g.reads[bucket]))
 	g.read_semaphore.release()
 
-	#debug_print(g, "Thread " + str(num) + " has write lock.")
 	g.write_semaphore.acquire()
+	debug_print(g, "Thread " + str(num) + " has write lock.")
 	for bucket,value in g.thread_writes.iteritems():
-		#g.writes[bucket] = g.writes.get(bucket,0) + 1
 		try:
 			g.writes[bucket] += value
 		except:
 			g.writes[bucket] = value
 		debug_print(g, "Thread " + str(num) + " has write lock.  Bucket=" + str(bucket) + " Value=" + str(value) + " g.writes[bucket]=" + str(g.writes[bucket]))
-		#pass
-		#if bucket in g.writes:
-			#g.writes[bucket] += g.thread_writes[bucket]
-		#else:
-			#g.writes[bucket] = g.thread_writes[bucket]
-		#debug_print(g, "Thread " + str(num) + " has writes lock t=" + str(g.thread_writes[bucket]) + " g=" + str(g.writes[bucket]))
 	g.write_semaphore.release()
 
 	g.total_semaphore.acquire()
@@ -922,7 +903,10 @@ def thread_parse(g, file, num):
 				#print "a=" + a + " b=" + b + " c=" + c + "\n"
 				#print set
 				#sys.stdout.flush()
-				parse_me(g, set[0], int(set[1]), int(set[2]))
+				try:
+					parse_me(g, set[0], int(set[1]), int(set[2]))
+				except:
+					pass
 			#sys.stdout.flush()
 		fo.close()
 		total_thread_counts(g, num)
@@ -950,9 +934,8 @@ def parse_me(g, rw, lba, size):
 		for i in xrange(0, bucket_hits):
 			bucket = int((lba * g.sector_size) / g.bucket_size) + i
 			if bucket > g.num_buckets:
-				#printf("ERROR: lba=%d bucket=%d greater than num_buckets=%d\n", int(lba), bucket, g.num_buckets)
+				# Not sure why, but we occassionally get buckets beyond our max LBA range
 				bucket = g.num_buckets - 1
-				#continue
 			if True:
 				if bucket in g.thread_reads:
 					g.thread_reads[bucket] += 1
@@ -981,7 +964,7 @@ def parse_me(g, rw, lba, size):
 		for i in xrange(0, bucket_hits):
 			bucket = int((lba * g.sector_size) / g.bucket_size) + i
 			if bucket > g.num_buckets:
-				#printf("ERROR: lba=%d bucket=%d greater than num_buckets=%d\n", int(lba), bucket, g.num_buckets)
+				# Not sure why, but we occassionally get buckets beyond our max LBA range
 				bucket = g.num_buckets - 1
 			if True:
 				if bucket in g.thread_writes:
@@ -996,8 +979,6 @@ def parse_me(g, rw, lba, size):
 			if(g.thread_writes[bucket] > g.thread_max_bucket_hits):
 				g.thread_max_bucket_hits = g.thread_writes[bucket]
 			g.thread_bucket_hits_total += 1
-	#else:
-		#print  "rw=" + rw + " lba=" + lba + " size=" + size
 	return
 # parse_me (DONE)
 
@@ -1005,7 +986,6 @@ def parse_me(g, rw, lba, size):
 def parse_filetrace(g, file, num):
 	thread_files_to_lbas = {}
 	os.system("gunzip " + file + ".gz")
-	#time.sleep(3)
 	debug_print(g, "tracefile = " + file + " " + str(num) + "\n")
 	try:
 		fo = open(file, "r")
@@ -1108,17 +1088,9 @@ def run_cmd(g, cmd):
 	out = ""
 	debug_print(g, "cmd: " + cmd)
 	args = shlex.split(cmd)
-	#lex = shlex.shlex(cmd)
-	#lex.quotes = '"'
-	#lex.whitespace_split = True
-	#args = cmd
-	#debug_print(g, "args" +  args)
-	#args = list(lex)
-	#print "args: "
 	
 	try:
 		p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-		#p = subprocess.Popen(args)
 	except:
 		print "ERROR: problem with Popen"
 		sys.exit(1)
@@ -1135,6 +1107,7 @@ def run_cmd(g, cmd):
 
 ### regex_find
 def regex_find(pattern, input):
+	output = ()
 	for line in input.split("\n"):
 		match = re.search(pattern, line)
 		try:
@@ -1171,7 +1144,6 @@ def main(argv):
 		(rc, fdisk_version) = run_cmd(g, "fdisk -v")
 		match = re.search("util-linux-ng", fdisk_version)
 		if match:
-			#debug_print(g,match.group(1))
 			# RHEL 6.x
 			os.system("fdisk -ul "+g.device+" > fdisk."+g.device_str)
 		else:
@@ -1183,7 +1155,9 @@ def main(argv):
 		while runcount > 0:
 			time_left = runcount * g.timeout
 			percent_prog = (g.runtime - time_left) * 100  / g.runtime
-			print "\r"+str(percent_prog)+" % done(" + str(time_left) + " seconds left)     "
+			printf( "\r%d %% done (%d seconds left)", percent_prog, time_left)
+			# BEN
+			sys.stdout.flush()
 			cmd = "blktrace -b " + str(g.buffer_size) + " -n " + str(g.buffer_count) + " -a queue -d " + str(g.device) + " -o blk.out." + str(g.device_str) + ".0 -w " + str(g.timeout) + " &> /dev/null"
 			rc = os.system(cmd)
 			if rc != 0:
@@ -1196,7 +1170,6 @@ def main(argv):
 				print "option enabled.  This should allow blktrace to function\n"
 				print "ERROR: Could not run blktrace"
 				sys.exit(7)
-			#cmd = "blkparse -i blk.out." + g.device_str + ".0 -q -f " + '" %d %a %S %n" | grep -v cfq | gzip --fast > blk.out.' + g.device_str + ".0.blkparse.gz; rm -f blk.out." + g.device_str + ".0.blktrace.*"
 			cmd = "blkparse -i blk.out." + g.device_str + ".0 -q -f " + '" %d %a %S %n\n" | grep -v cfq | gzip --fast > blk.out.' + g.device_str + ".0.blkparse.gz;"
 			rc = os.system(cmd)
 			runcount -= 1
@@ -1209,6 +1182,7 @@ def main(argv):
 		if g.trace_files:
 			filetrace = "filetrace." + g.device_str + ".*.txt.gz"
 		cmd = "tar -cf " + tarball_name + " blk.out." + g.device_str + ".*.gz fdisk." + g.device_str + " " + filetrace + " &> /dev/null"
+		print cmd
 		rc = os.system(cmd)
 		if rc != 0:
 			print "ERROR: failed to tarball " + tarball_name
@@ -1244,9 +1218,21 @@ def main(argv):
 		rc=0
 		out=""
 		(rc, out) = run_cmd(g, 'cat '+ g.fdisk_file )
-		g.sector_size = int(regex_find("Units = sectors of \d+ \S \d+ = (\d+) bytes", out)[0])
-		g.total_lbas  = int(regex_find(".+ total (\d+) sectors", out)[0])
-		g.device      = regex_find("Disk (\S+): \S+ GB, \d+ bytes", out)[0]
+		try:
+			g.sector_size = int(regex_find("Units = sectors of \d+ \S \d+ = (\d+) bytes", out)[0])
+		except:
+			print "ERROR: Sector Size Invalid"
+			sys.exit()
+		try:
+			g.total_lbas  = int(regex_find(".+ total (\d+) sectors", out)[0])
+		except:
+			print "ERROR: Sector Size Invalid"
+			sys.exit()
+		try:
+			g.device      = regex_find("Disk (\S+): \S+ GB, \d+ bytes", out)[0]
+		except:
+			print "ERROR: Sector Size Invalid"
+			sys.exit()
 		verbose_print(g, "dev="+ g.device + " lbas=" + str(g.total_lbas) + " sec_size=" + str(g.sector_size))
 
 		g.total_capacity_gib = g.total_lbas * g.sector_size / g.GiB
@@ -1263,19 +1249,10 @@ def main(argv):
 		g.debug=False
 		rc = os.system("rm -f filetrace." + g.device_str + ".*.txt")
 		rc = os.system("rm -f blk.out." + g.device_str + ".*.blkparse")
-		#g.reads =  dict.fromkeys(range(g.num_buckets), 0)
-		#g.writes =  dict.fromkeys(range(g.num_buckets), 0)
-		#for i in (range(g.num_buckets)):
-			#printf("\ri=%d", i)
-			#g.reads[i] = 0
-			#g.writes[i] = 0
-		#print "r=" + str(len(g.reads)) + " w=" + str(len(g.writes))
 		print "Time to parse.  Please wait...\n"
 
 		size = len(file_list)
 		file_count = 0
-		#print "len=" + str(file_count)
-		#print file_list
 
 		plist = []
 		for file in file_list:
@@ -1310,7 +1287,6 @@ def main(argv):
 					plist.append(p)
 					p.start()
 			while len(plist) > g.thread_max:
-				#print "len=" + str(len(plist))
 				for p in plist:
 					try:
 						p.join(0)
@@ -1318,11 +1294,7 @@ def main(argv):
 						pass
 					else:
 						if not p.is_alive():
-							#print "A: removing " + str(p.pid) + " g.THREAD_MAX= " + str(g.THREAD_MAX) +  "\n"
 							plist.remove(p)
-						#else:
-							#pass
-							#print "Process " + str(p.pid)  + " is still alive\n"
 				time.sleep(0.10)
 		if g.single_threaded == False:
 			x=1
@@ -1336,7 +1308,6 @@ def main(argv):
 				printf("\rWaiting on %3d threads to complete processing%-3s", len(plist), dots)
 				printf("    ")
 				sys.stdout.flush()
-				#for p in plist:
 				for p in plist:
 					try:
 						p.join(0)
@@ -1344,10 +1315,7 @@ def main(argv):
 						pass
 					else:
 						if not p.is_alive():
-							#print "B: removing " + str(p.pid) + " g.THREAD_MAX= " + str(g.THREAD_MAX) +  "\n"
 							plist.remove(p)
-						#else:
-							#print "Process " + str(p.pid)  + " is still alive\n"
 				time.sleep(0.10)
 		print "\rFinished parsing files.  Now to analyze         \n"
 		file_to_buckets(g)
