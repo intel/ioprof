@@ -53,9 +53,11 @@ class global_variables:
 		self.total_blocks_semaphore    = self.manager.Lock() # Lock for the global total LBA's accessed
 		self.files_to_lbas_semaphore   = self.manager.Lock() # Lock for the global file->lba mapping hash
 		self.max_bucket_hits_semaphore = self.manager.Lock() # Lock for the global maximum hits per bucket
-		self.bucket_to_files_semaphore = self.manager.Lock() # Lock for the global bucket_to_files
+		self.bucket_to_files_semaphore1 = self.manager.Lock() # Lock for the global bucket_to_files
+		self.bucket_to_files_semaphore2 = self.manager.Lock() # Lock for the global bucket_to_files
 		self.term_semaphore            = self.manager.Lock() # Lock for the global TERM
 		self.trace_files_semaphore     = self.manager.Lock() # Lock for the global trace_files
+		self.file_hit_count_semaphore  = self.manager.Lock() # Lock for the global file_hit_count
 
 		# Thread-local variables.  Use these to avoid locking constantly
 		self.thread_io_total   = 0          # Thread-local total I/O count (I/O ops)
@@ -465,18 +467,11 @@ def bucket_to_file_list(g, bucket_id):
 	return list
 # bucket_to_file_list (DONE)
 
-### Tranlate a file to a list of buckets
-def file_to_buckets(g):
-	k=0
-	size = len(g.files_to_lbas)
-	print "Moving some memory around.  This will take a few seconds..."
-	f = dict(g.files_to_lbas)
+def file_to_bucket_helper(g, f):
 	for file, r in f.iteritems():
-		k+=1
-		if k % 100 == 0:
-			printf("\rfile_to_buckets: %d %% (%d of %d)", (k*100 / size), k, size)
-			sys.stdout.flush()
-		g.file_hit_count[file]=0 # Initialize file hit count
+		#g.file_hit_count_semaphore.acquire()
+		#g.file_hit_count[file]=0 # Initialize file hit count
+		#g.file_hit_count_semaphore.release()
 		tempstr = f[file]
 		debug_print(g, "f=" + file + " r=" + r)
 		x=0
@@ -494,10 +489,27 @@ def file_to_buckets(g):
 				continue
 			start_bucket  = lba_to_bucket(g, start)
 			finish_bucket = lba_to_bucket(g, finish)
-
+	
 			debug_print(g, file + " s_lba=" + start + " f_lba=" + finish + " s_buc=" + str(start_bucket) + "f_buc=" + str(finish_bucket ))
+			#print "WAITING ON LOCK"
 			i=start_bucket
+			#print "GOT LOCK!"
 			while i<= finish_bucket:
+				if (i < (g.num_buckets/2)):
+					g.bucket_to_files_semaphore1.acquire()
+				else:
+					g.bucket_to_files_semaphore2.acquire()
+				try:
+					g.bucket_to_files[i] = g.bucket_to_files[i] + file + " "
+				except:
+					g.bucket_to_files[i] = file + " "
+				if (i < (g.num_buckets/2)):
+					g.bucket_to_files_semaphore1.release()
+				else:
+					g.bucket_to_files_semaphore2.release()
+				i+=1
+				continue
+
 				debug_print(g, "i=" + str(i))
 				if i in g.bucket_to_files:
 					pattern = re.escape(file)
@@ -511,8 +523,108 @@ def file_to_buckets(g):
 					g.bucket_to_files[i] = file + " "
 				debug_print(g, "i=" + str(i) + "file_to_buckets: " + g.bucket_to_files[i])
 				i+=1
-	print "\rDone correlating files to buckets.  Now time to count bucket hits"
 	return
+
+### Tranlate a file to a list of buckets
+def file_to_buckets(g):
+	k=0
+	size = len(g.files_to_lbas)
+	print "Moving some memory around.  This will take a few seconds..."
+	f = dict(g.files_to_lbas)
+	temp = {}
+	plist = []
+	g.thread_max = 1024
+
+	#if g.single_threaded == False:
+	if False:
+		for file, r in f.iteritems():
+			g.file_hit_count[file]=0 # Initialize file hit count
+			temp[file] = r
+			k+=1
+			if k % 10 == 0:
+				p = Process(target=file_to_bucket_helper, args=(g, temp))
+				plist.append(p)
+				p.start()
+				printf("\rfile_to_buckets: %d %% (%d of %d)", (k*100 / size), k, size)
+				sys.stdout.flush()
+			#if False:
+			while len(plist) > g.thread_max:
+				for p in plist:
+					try:
+						p.join(0)
+					except:
+						pass
+					else:
+						if not p.is_alive():
+							plist.remove(p)
+					time.sleep(0.10)
+		x=1
+		while len(plist) > 0:
+			dots=""
+			for i in xrange(x):
+				dots = dots + "."
+			x+=1
+			if x>3:
+				x=1
+			printf("\rWaiting on %3d threads to complete processing%-3s", len(plist), dots)
+			printf("    ")
+			sys.stdout.flush()
+			for p in plist:
+				try:
+					p.join(0)
+				except:
+					pass
+				else:
+					if not p.is_alive():
+						plist.remove(p)
+			time.sleep(0.10)
+	
+		print "\rDone correlating files to buckets.  Now time to count bucket hits"
+		return
+	else:
+	
+		for file, r in f.iteritems():
+			k+=1
+			if k % 100 == 0:
+				printf("\rfile_to_buckets: %d %% (%d of %d)", (k*100 / size), k, size)
+				sys.stdout.flush()
+			g.file_hit_count[file]=0 # Initialize file hit count
+			tempstr = f[file]
+			debug_print(g, "f=" + file + " r=" + r)
+			x=0
+			for range in tempstr.split(' '):
+				if range == ' ' or range == '':
+					continue # TODO
+				debug_print(g, 'r(' + str(x) + ')=' + range)
+				x+=1
+				try:
+					(start, finish) = range.split(':')
+				except:
+					continue
+				debug_print(g, file + " start=" + start + ", finish=" + finish)
+				if start == '' or finish == '':
+					continue
+				start_bucket  = lba_to_bucket(g, start)
+				finish_bucket = lba_to_bucket(g, finish)
+	
+				debug_print(g, file + " s_lba=" + start + " f_lba=" + finish + " s_buc=" + str(start_bucket) + "f_buc=" + str(finish_bucket ))
+				i=start_bucket
+				while i<= finish_bucket:
+					debug_print(g, "i=" + str(i))
+					if i in g.bucket_to_files:
+						pattern = re.escape(file)
+						match = re.search(pattern, g.bucket_to_files[i])
+						try:
+							match.group(0)
+						except:
+							debug_print(g, "No Match!  FILE=" + pattern + " PATTERN=" + g.bucket_to_files[i])
+							g.bucket_to_files[i] = g.bucket_to_files[i] + file + " "
+					else:
+						g.bucket_to_files[i] = file + " "
+					debug_print(g, "i=" + str(i) + "file_to_buckets: " + g.bucket_to_files[i])
+					i+=1
+		print "\rDone correlating files to buckets.  Now time to count bucket hits"
+		return
 # file_to_buckets (DONE)
 
 ### Add up I/O hits to each file touched by a bucket
