@@ -1966,6 +1966,10 @@ if ($mode eq "post")
         {
                 die("ERROR: Failed to unpack input file: $tar_file");
         }
+	if(! -e $fdisk_file)
+	{
+		die("ERROR: Could not find fdisk file $fdisk_file.  Please verify the .tar wasn't renamed");
+	}
         $sector_size=`cat $fdisk_file | grep 'Units'| awk '{ print \$9 }'`;
 	my $lba_line = `cat $fdisk_file | grep "sectors\$"`;
 	print "$lba_line\n" if ($DEBUG);
