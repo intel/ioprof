@@ -184,6 +184,8 @@ def check_args(g, argv):
 			g.trace_files= True
 		elif opt == '-r':
 			g.runtime = int(arg)
+			if g.runtime < 3:
+				g.runtime = 3 # Min runtime
 		elif opt == '-v':
 			g.verbose = True
 		elif opt == '-p':
