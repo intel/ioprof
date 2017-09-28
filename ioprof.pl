@@ -261,7 +261,10 @@ sub check_args
 
                 $dev = $opt{'d'};
                 $runtime = $opt{'r'};
-		if ($runtime < 3) { $runtime = 3; # Min Runtime }
+		if ($runtime < 3)
+		{
+			$runtime = 3; # Min Runtime
+		}
                 print "Runtime: $runtime\n" if ($DEBUG);
 
                 if ($dev =~ /\/dev\/(\S+)/) { $dev_str = $1; }
