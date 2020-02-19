@@ -16,7 +16,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 ### I/O profing tool
-my $VERSION = '2.0.4';
+my $VERSION = '2.0.5';
 print "$0 ($VERSION)\n";
 
 my $VERBOSE         = 0;
@@ -252,7 +252,6 @@ sub check_args
         }
         elsif($mode eq 'trace')
         {
-                check_trace_prereqs();
                 # Check for invalid args
                 if(!$opt{'d'} || !$opt{'r'}) { usage(); }
 
@@ -1823,6 +1822,9 @@ sub worker
 ############
 ### MAIN ###
 ############
+
+### Check blktrace prereqs
+check_trace_prereqs();
 
 ### Check command line arguments
 check_args();
