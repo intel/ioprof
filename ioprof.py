@@ -24,6 +24,7 @@ import multiprocessing
 class global_variables:
 	#VERBOSE   = False
 	def __init__(self):
+		self.version           = "1.0.0.1"                   # Version string
 		self.verbose           = False                       # Verbose logging (-v flag)
 		self.debug             = False                       # Debug log level (-x flag)
 		self.single_threaded   = False                       # Single threaded for debug/profiling
@@ -1238,6 +1239,7 @@ def printf(format, *args):
 ### MAIN
 def main(argv):
 	g = global_variables()
+	print "VERSION: ", g.version
 
 	check_args(g, argv)
 
