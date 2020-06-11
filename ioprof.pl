@@ -1977,7 +1977,8 @@ if ($mode eq "post")
 		die("ERROR: Could not find fdisk file $fdisk_file.  Please verify the .tar wasn't renamed");
 	}
 	$sector_size=`cat $fdisk_file | grep 'Units'| awk '{ print \$9 }'`;
-	if($sector_size == "bytes")
+	chomp($sector_size);
+	if($sector_size eq "bytes")
 	{
 		$sector_size=`cat $fdisk_file | grep 'Units'| awk '{ print \$8 }'`;
 	}
